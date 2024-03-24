@@ -4,6 +4,7 @@ from toga.style.pack import COLUMN, LEFT, RIGHT, ROW
 from bs4 import BeautifulSoup
 import cloudscraper
 import re
+import os
 
 
 def completar_link(link_base, link):
@@ -35,20 +36,48 @@ def limpiar_nombre(nombre):
 
 
 def limpiar_archivo(archivo):
-    temp = open("temp.txt", "w", encoding="utf-8")
-    lineas = archivo.readlines()
+    archivo.seek(0)
+    lineas = list(set(archivo.readlines()))
+    print("Encontradas", len(lineas), "series")
+    nombre_archivo = os.path.basename(archivo.name)
+    archivo.close()
+    archivo = open(nombre_archivo, "w+", encoding="utf-8")
     for linea in lineas:
         if re.match(".*:.*", linea) is not None:
-            temp.write(linea)
-    archivo.close()
-    return temp
+            archivo.write(linea)
+    return archivo
 
 
-def iniciar_proceso(nombre_archivo, url, url_page, cant_paginas, formato, table):
-    archivo = open(nombre_archivo, "w+", encoding="utf-8")
+def tiene_html(url):
+    if url.endswith(".html"):
+        return ".html"
+    else:
+        return ""
+
+
+def cargar_tabla(archivo, tabla):
+    archivo.seek(0)
+    lineas = archivo.readlines()
+    for linea in lineas:
+        nombre_serie = " ".join(linea.split()[0:-2])
+        url_serie = linea.split()[-1]
+        tabla.data.append([nombre_serie, url_serie])
+
+
+def crear_archivo(nombre):
+    if nombre.endswith(".txt"):
+        nombre_archivo = nombre
+    else:
+        nombre_archivo = nombre + ".txt"
+    return open(nombre_archivo, "w+", encoding="utf-8")
+
+
+def iniciar_proceso(nombre_archivo, url, url_page, cant_paginas, formato, tabla, progress_bar):
+    archivo = crear_archivo(nombre_archivo)
     scraper = cloudscraper.create_scraper()
     print('Iniciando extracción...')
     contador = 0
+    ultimo_contador = 0
     for i in range(1, cant_paginas + 1):
         web = scraper.get(url)
         soup = BeautifulSoup(web.text, "html5lib").find_all(formato)
@@ -56,16 +85,22 @@ def iniciar_proceso(nombre_archivo, url, url_page, cant_paginas, formato, table)
             serie = link.find("a", href=True)
             if serie is not None:
                 nombre = serie.get_text().strip()
-                if len(nombre) > 10:
+                if len(nombre) > 5:
                     nombre_limpio = limpiar_nombre(nombre)
                     url_completo = completar_link(url, serie["href"])
                     archivo.write(nombre_limpio + " : " + url_completo + "\n")
-                    table.data.append([nombre_limpio, url_completo])
                     contador += 1
-        url = url_page + str(i + 1)
-        print("Procesando ", contador, "series, página:", i)
-    print("Encontradas", contador, "series")
+        if contador - ultimo_contador < 2:
+            print("Última página alcanzada, abortando proceso")
+            progress_bar.value = cant_paginas
+            break
+        ultimo_contador = contador
+        progress_bar.value = i+1
+        url = url_page + str(i + 1) + tiene_html(url)
+
+        print("Procesando ", contador, "enlaces, página:", i)
     archivo = limpiar_archivo(archivo)
+    cargar_tabla(archivo, tabla)
     archivo.close()
 
 
@@ -93,7 +128,7 @@ class ExtractorSeries (toga.App):
         box_url2.add(input_url2)
 
         box_cantp = toga.Box(style=Pack(direction=ROW, padding=5))
-        input_cantp = toga.TextInput(value="0", style=Pack(flex=1))
+        input_cantp = toga.NumberInput(min=1, step=1, value = 1, style=Pack(flex=1))
         label_cantp = toga.Label("Cantidad de páginas a analizar:  ")
         box_cantp.add(label_cantp)
         box_cantp.add(input_cantp)
@@ -104,24 +139,33 @@ class ExtractorSeries (toga.App):
         box_label.add(label_label)
         box_label.add(input_label)
 
+        box_info = toga.Box()
+        progress_bar = toga.ProgressBar(max=input_cantp.value, style=Pack(flex=1))
+        box_info.add(progress_bar)
+
+
+
         box_campos = toga.Box(style=Pack(direction=COLUMN))
         box_campos.add(box_nombre)
         box_campos.add(box_url)
         box_campos.add(box_url2)
         box_campos.add(box_cantp)
         box_campos.add(box_label)
+        box_campos.add(box_info)
 
         table = toga.Table(headings=["Nombre", "Dirección"], style=Pack(flex=1))
 
         def iniciar():
             def on_press(input_button):
                 try:
+                    progress_bar.max = input_cantp.value
                     return iniciar_proceso(input_nombre.value,
                                            input_url.value,
                                            input_url2.value,
                                            int(input_cantp.value),
                                            input_label.value,
-                                           table)
+                                           table,
+                                           progress_bar)
                 except Exception as e:
                     print(str(e))
             return on_press
@@ -145,7 +189,7 @@ def main():
                            app_id="extractor_series",
                            icon="icono",
                            author="Eduardo Montecchia",
-                           description="Versión 0.1.1")
+                           description="Versión 0.1.2")
 
 
 if __name__ == '__main__':
